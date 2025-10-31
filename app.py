@@ -1,188 +1,195 @@
+
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, filedialog
+from tkinter import ttk
+
 from database import get_db
-from typing import Optional
 
-# Import PDF generation library
-try:
-    from reportlab.lib.pagesizes import landscape, letter
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-    from reportlab.lib import colors
-    REPORTLAB_AVAILABLE = True
-except ImportError:
-    REPORTLAB_AVAILABLE = False
-
+# --- Constants ---
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-TIMESLOTS = [f"{h:02d}:00" for h in range(8, 22)]
+TIME_SLOTS = [f"{h:02d}:{m:02d}" for h in range(8, 22) for m in (0, 30)]
+CELL_HEIGHT = 25  # Height for a 30-min slot
+HEADER_BG = "#2c3e50"
+HEADER_FG = "white"
+GRID_BG = "#ecf0f1"
+GRID_LINE_COLOR = "#bdc3c7"
 
 class TimetableApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Timetable Manager")
+        self.root.title("TAFE Timetabling Application")
+        self.root.geometry("1600x1000")
         self.db = get_db()
 
-        self.style = ttk.Style(self.root)
-        self.style.theme_use("clam")
-        self.style.configure("TLabel", font=("Helvetica", 11))
-        self.style.configure("TButton", font=("Helvetica", 10))
-        self.style.configure("Treeview.Heading", font=("Helvetica", 11, "bold"))
-        self.style.configure("Header.TLabel", font=("Helvetica", 12, "bold"))
+        # --- Styling ---
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("TNotebook.Tab", font=("Helvetica", 11, "bold"))
+        style.configure("Treeview.Heading", font=("Helvetica", 10, "bold"))
+        style.configure("TLabel", font=("Helvetica", 10))
+        style.configure("TButton", font=("Helvetica", 10))
+        style.configure("Header.TLabel", font=("Helvetica", 11, "bold"), background=HEADER_BG, foreground=HEADER_FG)
 
-        self._build_ui()
-        self.refresh_all_tabs()
+        self._build_main_layout()
+        self._build_management_panel()
+        self._build_unscheduled_units_panel()
+        self._build_timetable_panel()
 
-    def _build_ui(self):
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
-        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_change)
+        self.refresh_all()
+
+    def _build_main_layout(self):
+        # Main layout with a resizable pane
+        self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        self.main_pane.pack(fill=tk.BOTH, expand=True)
+
+        # Left panel for management and unscheduled units
+        self.left_panel = ttk.Notebook(self.main_pane)
+        self.main_pane.add(self.left_panel, weight=1)
+
+        # Right panel for the timetable grid
+        self.right_panel = ttk.Frame(self.main_pane)
+        self.main_pane.add(self.right_panel, weight=4)
+
+    def _build_management_panel(self):
+        # This notebook will contain tabs for Teachers, Courses, Rooms
+        self.mgmt_notebook = ttk.Notebook(self.left_panel)
+        self.left_panel.add(self.mgmt_notebook, text="Management")
+
+        # Create the individual tabs
+        self.teachers_tab = ttk.Frame(self.mgmt_notebook)
+        self.courses_tab = ttk.Frame(self.mgmt_notebook)
+        self.rooms_tab = ttk.Frame(self.mgmt_notebook)
+
+        self.mgmt_notebook.add(self.teachers_tab, text="Teachers")
+        self.mgmt_notebook.add(self.courses_tab, text="Courses & Units")
+        self.mgmt_notebook.add(self.rooms_tab, text="Rooms")
         
-        # ... (Tabs for Colleges, Teachers, Courses & Units will be built here) ...
-        # For brevity, focusing on the Timetable tab where the change is.
-        # Assume other build methods like _build_teachers_tab are defined elsewhere.
+        # Populate the tabs (basic placeholder for now)
+        ttk.Label(self.teachers_tab, text="Teacher Management UI goes here.").pack(pady=20)
+        ttk.Label(self.courses_tab, text="Course & Unit Management UI goes here.").pack(pady=20)
+        ttk.Label(self.rooms_tab, text="Room Management UI goes here.").pack(pady=20)
+
+    def _build_unscheduled_units_panel(self):
+        unscheduled_frame = ttk.Frame(self.left_panel)
+        self.left_panel.add(unscheduled_frame, text="Unscheduled Units")
+
+        ttk.Label(unscheduled_frame, text="Units to be Scheduled", font=("Helvetica", 12, "bold")).pack(pady=5)
         
-        self.tab_timetable = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_timetable, text="Timetable")
-        self._build_timetable_tab(self.tab_timetable)
+        cols = ("course", "unit", "required", "scheduled")
+        self.units_bank_tree = ttk.Treeview(unscheduled_frame, columns=cols, show="headings")
         
-        self.tab_workload = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_workload, text="Workload")
-        self._build_workload_tab(self.tab_workload)
+        self.units_bank_tree.heading("course", text="Course")
+        self.units_bank_tree.heading("unit", text="Unit")
+        self.units_bank_tree.heading("required", text="Required (h)")
+        self.units_bank_tree.heading("scheduled", text="Scheduled (h)")
 
+        self.units_bank_tree.column("required", width=80, anchor=tk.CENTER)
+        self.units_bank_tree.column("scheduled", width=80, anchor=tk.CENTER)
 
-    def _build_timetable_tab(self, parent):
-        frame = ttk.Frame(parent, padding=10)
-        frame.pack(fill="both", expand=True)
+        self.units_bank_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        top_bar = ttk.Frame(frame)
-        top_bar.pack(fill="x", pady=(0, 10))
+    def _build_timetable_panel(self):
+        # --- Top Filter Bar ---
+        filter_bar = ttk.Frame(self.right_panel)
+        filter_bar.pack(fill=tk.X, padx=10, pady=5)
         
-        ttk.Label(top_bar, text="Select College:", style="Header.TLabel").pack(side="left")
-        self.college_var = tk.StringVar()
-        self.college_combo = ttk.Combobox(top_bar, textvariable=self.college_var, state="readonly", width=20)
-        self.college_combo.pack(side="left", padx=10)
-        self.college_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_timetable())
+        ttk.Label(filter_bar, text="View by Campus:").pack(side=tk.LEFT, padx=(0, 5))
+        self.campus_filter = ttk.Combobox(filter_bar, state="readonly", width=15)
+        self.campus_filter.pack(side=tk.LEFT, padx=5)
 
-        # Add Print to PDF button
-        if REPORTLAB_AVAILABLE:
-            pdf_button = ttk.Button(top_bar, text="Print to PDF", command=self.print_to_pdf)
-            pdf_button.pack(side="right", padx=5)
-        else:
-            ttk.Label(top_bar, text="Install 'reportlab' for PDF export.", foreground="red").pack(side="right")
-
-        # Canvas for scrollable grid
-        canvas = tk.Canvas(frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-        self.grid_frame = ttk.Frame(canvas)
-
-        self.grid_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.grid_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        # Build grid
-        self._build_timetable_grid(self.grid_frame)
-    
-    def _build_timetable_grid(self, parent):
-        # Header row
-        ttk.Label(parent, text="", relief="ridge").grid(row=0, column=0, sticky="nsew")
-        for c, day in enumerate(DAYS, 1):
-            ttk.Label(parent, text=day, relief="ridge", padding=5, anchor="center", style="Header.TLabel").grid(row=0, column=c, sticky="ew")
-
-        self.cell_widgets = {}
-        for r, timeslot in enumerate(TIMESLOTS, 1):
-            ttk.Label(parent, text=timeslot, relief="ridge", padding=5).grid(row=r, column=0, sticky="ns")
-            for c, day in enumerate(DAYS, 1):
-                cell = ttk.Frame(parent, relief="solid", borderwidth=1)
-                cell.grid(row=r, column=c, sticky="nsew")
-                label = ttk.Label(cell, text="", anchor="center", padding=5, wraplength=150, justify="center")
-                label.pack(expand=True, fill="both")
-
-                for widget in [cell, label]:
-                    widget.bind("<Button-3>", lambda e, d=day, t=timeslot: self.on_cell_right_click(e, d, t))
-                    widget.bind("<Button-2>", lambda e, d=day, t=timeslot: self.on_cell_right_click(e, d, t))
-                    widget.bind("<Control-Button-1>", lambda e, d=day, t=timeslot: self.on_cell_right_click(e, d, t))
-
-                self.cell_widgets[(day, timeslot)] = label
+        ttk.Label(filter_bar, text="Teacher:").pack(side=tk.LEFT, padx=(15, 5))
+        self.teacher_filter = ttk.Combobox(filter_bar, state="readonly", width=20)
+        self.teacher_filter.pack(side=tk.LEFT, padx=5)
         
-        for i in range(len(DAYS) + 1):
-            parent.columnconfigure(i, weight=1, uniform="grid")
+        ttk.Label(filter_bar, text="Course:").pack(side=tk.LEFT, padx=(15, 5))
+        self.course_filter = ttk.Combobox(filter_bar, state="readonly", width=25)
+        self.course_filter.pack(side=tk.LEFT, padx=5)
+        
+        # --- Timetable Grid Canvas ---
+        self.grid_canvas = tk.Canvas(self.right_panel, bg=GRID_BG, highlightthickness=0)
+        
+        v_scroll = ttk.Scrollbar(self.right_panel, orient=tk.VERTICAL, command=self.grid_canvas.yview)
+        self.grid_canvas.configure(yscrollcommand=v_scroll.set)
 
-    def print_to_pdf(self):
-        college_name = self.college_var.get()
-        if not college_name:
-            messagebox.showwarning("PDF Export", "Please select a college first.")
-            return
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.grid_canvas.pack(fill=tk.BOTH, expand=True, padx=(10, 0), pady=(0, 10))
 
-        college_id = self.college_map.get(college_name)
-        schedule_data = self.db.get_schedule_for_college(college_id)
+        self.grid_canvas.bind("<Configure>", self._draw_grid)
+        
+    def _draw_grid(self, event=None):
+        self.grid_canvas.delete("all")
+        width = self.grid_canvas.winfo_width()
+        height = len(TIME_SLOTS) * CELL_HEIGHT
 
-        # Ask user for save location
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF Documents", "*.pdf")],
-            title="Save Timetable as PDF",
-            initialfile=f"{college_name}_Timetable.pdf"
-        )
-        if not file_path:
-            return # User cancelled
+        self.grid_canvas.config(scrollregion=(0, 0, width, height + 50))
 
-        try:
-            doc = SimpleDocTemplate(file_path, pagesize=landscape(letter))
-            elements = []
+        # --- Draw Header ---
+        header_height = 30
+        self.grid_canvas.create_rectangle(0, 0, width, header_height, fill=HEADER_BG, outline=GRID_LINE_COLOR)
+        
+        time_col_width = 80
+        day_col_width = (width - time_col_width) / len(DAYS)
+
+        # Header Text
+        self.grid_canvas.create_text(time_col_width / 2, header_height / 2, text="Time", fill=HEADER_FG, font=("Helvetica", 11, "bold"))
+        for i, day in enumerate(DAYS):
+            x = time_col_width + (i * day_col_width) + (day_col_width / 2)
+            self.grid_canvas.create_text(x, header_height / 2, text=day, fill=HEADER_FG, font=("Helvetica", 11, "bold"))
             
-            # Prepare data for the table
-            data = [["Time"] + DAYS] # Header row
-            schedule_map = {(item['day'], item['timeslot']): f"{item['unit_name'] or ''}\n{item['teacher_name'] or ''}\n{item['room'] or ''}".strip() for item in schedule_data}
-
-            for timeslot in TIMESLOTS:
-                row = [timeslot]
-                for day in DAYS:
-                    cell_content = schedule_map.get((day, timeslot), "")
-                    row.append(cell_content)
-                data.append(row)
-
-            # Create and style the table
-            table = Table(data, colWidths=[60] + [140]*len(DAYS))
-            style = TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.grey),
-                ('TEXTCOLOR',(0,0),(-1,0), colors.whitesmoke),
-                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 12),
-                ('BACKGROUND', (0,1), (0,-1), colors.lightgrey),
-                ('FONTNAME', (0,1), (0,-1), 'Helvetica-Bold'),
-                ('GRID', (0,0), (-1,-1), 1, colors.black)
-            ])
-            table.setStyle(style)
+        # --- Draw Grid Lines & Time Slots ---
+        for i, time in enumerate(TIME_SLOTS):
+            y = header_height + (i * CELL_HEIGHT)
             
-            elements.append(table)
-            doc.build(elements)
-            messagebox.showinfo("Success", f"PDF saved successfully to:\n{file_path}")
+            # Horizontal line
+            self.grid_canvas.create_line(0, y, width, y, fill=GRID_LINE_COLOR)
 
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to generate PDF: {e}")
+            # Time slot text (only for full hours)
+            if time.endswith(":00"):
+                self.grid_canvas.create_text(time_col_width / 2, y + (CELL_HEIGHT / 2), text=time, anchor=tk.CENTER, font=("Helvetica", 9))
 
-    # Dummy methods for other tabs to make the snippet runnable
-    def _build_workload_tab(self, parent):
-        ttk.Label(parent, text="Workload tracking will appear here.").pack(pady=20)
-    def on_cell_right_click(self, e, d, t):
-        print(f"Right-clicked {d} at {t}")
-    def refresh_timetable(self):
-        print("Refreshing timetable...")
-    def refresh_all_tabs(self):
-        # Mock college data for demonstration
-        self.college_map = {"Moss Vale": 1, "Goulburn": 2, "Queanbeyan": 3}
-        self.college_combo["values"] = list(self.college_map.keys())
-        if self.college_combo["values"]:
-            self.college_combo.current(0)
-    def on_tab_change(self, event):
-        pass
+        # Vertical lines
+        self.grid_canvas.create_line(time_col_width, 0, time_col_width, height + header_height, fill=GRID_LINE_COLOR)
+        for i in range(len(DAYS)):
+            x = time_col_width + (i * day_col_width)
+            self.grid_canvas.create_line(x, header_height, x, height + header_height, fill=GRID_LINE_COLOR)
+            
+    def refresh_unscheduled_units(self):
+        for item in self.units_bank_tree.get_children():
+            self.units_bank_tree.delete(item)
+        
+        units = self.db.get_unscheduled_units_summary()
+        for unit in units:
+            self.units_bank_tree.insert("", "end", values=(
+                unit["course_name"],
+                unit["name"],
+                f'{unit["required_hours"]:.1f}',
+                f'{unit["scheduled_hours"]:.1f}'
+            ))
+            
+    def refresh_filters(self):
+        colleges = [c['name'] for c in self.db.get_colleges()]
+        self.campus_filter['values'] = ["All"] + colleges
+        self.campus_filter.set("All")
+        
+        teachers = [t['name'] for t in self.db.get_teachers()]
+        self.teacher_filter['values'] = ["All"] + teachers
+        self.teacher_filter.set("All")
+
+        courses = [c['name'] for c in self.db.get_courses()]
+        self.course_filter['values'] = ["All"] + courses
+        self.course_filter.set("All")
+
+    def refresh_all(self):
+        self.refresh_unscheduled_units()
+        self.refresh_filters()
+        # In future phases, this will also refresh the timetable display itself
+
+    def on_close(self):
+        self.db.close()
+        self.root.destroy()
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = TimetableApp(root)
-    root.geometry("1400x900")
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
+
